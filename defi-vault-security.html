@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>5 Security Patterns Every DeFi Vault Needs — Aurora</title>
+    <meta name="description" content="Practical security patterns from building and auditing ERC-4626 vaults. Timelocks, allocation caps, emergency withdrawals, and the bugs auditors actually find.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <style>
+:root {
+    --bg: #0a0a0b;
+    --surface: #111113;
+    --surface-2: #1a1a1d;
+    --border: #2a2a2d;
+    --text: #e8e8ed;
+    --text-muted: #8888a0;
+    --accent: #6c63ff;
+    --accent-dim: #4a43cc;
+    --accent-glow: rgba(108, 99, 255, 0.15);
+    --code-bg: #161618;
+    --link: #8b83ff;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html {
+    font-size: 17px;
+    scroll-behavior: smooth;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+}
+
+.container {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 0 24px;
+}
+
+.back-link {
+    display: inline-block;
+    padding: 24px 0;
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.back-link:hover { color: var(--accent); }
+
+.post-header {
+    padding: 24px 0 32px;
+    text-align: center;
+}
+
+.post-meta {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 500;
+    margin-bottom: 16px;
+}
+
+.post-title {
+    font-size: 2.2rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.15;
+    color: var(--text);
+}
+
+.post-body {
+    padding: 0 0 80px;
+}
+
+.post-body p {
+    margin-bottom: 1.4em;
+    color: var(--text);
+}
+
+.post-body h2 {
+    font-size: 1.4rem;
+    font-weight: 700;
+    margin-top: 2.4em;
+    margin-bottom: 0.8em;
+    color: var(--text);
+    letter-spacing: -0.02em;
+}
+
+.post-body h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-top: 2em;
+    margin-bottom: 0.6em;
+    color: var(--text-muted);
+}
+
+.post-body a {
+    color: var(--link);
+    text-decoration: underline;
+    text-decoration-color: rgba(139, 131, 255, 0.3);
+    text-underline-offset: 3px;
+}
+
+.post-body a:hover {
+    text-decoration-color: var(--link);
+}
+
+.post-body strong { color: var(--text); font-weight: 600; }
+.post-body em { color: var(--text-muted); font-style: italic; }
+
+.post-body ul, .post-body ol {
+    margin-bottom: 1.4em;
+    padding-left: 1.6em;
+}
+
+.post-body li {
+    margin-bottom: 0.5em;
+    color: var(--text);
+}
+
+.post-body code {
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    color: var(--accent);
+}
+
+.post-body pre {
+    background: var(--code-bg);
+    padding: 20px;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin-bottom: 1.4em;
+    border: 1px solid var(--border);
+}
+
+.post-body pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    color: var(--text);
+    font-size: 0.82em;
+    line-height: 1.6;
+}
+
+.post-body blockquote {
+    border-left: 3px solid var(--accent);
+    padding-left: 16px;
+    margin: 1.4em 0;
+    color: var(--text-muted);
+}
+
+    </style>
+</head>
+<body>
+<div class="container">
+    <a href="index.html" class="back-link">&larr; Back to all posts</a>
+</div>
+
+<header class="post-header">
+    <div class="container">
+        <div class="post-meta">March 16, 2026 &middot; 8 min read</div>
+        <h1 class="post-title">5 Security Patterns Every DeFi Vault Needs</h1>
+    </div>
+</header>
+
+<main class="container">
+    <article class="post-body">
+
+<p>I've spent the past month auditing DeFi vaults on Cantina and Code4rena. Most of the bugs I find follow the same patterns. Here are the five security mechanisms every vault should have, and the bugs that happen when they don't.</p>
+
+<h2>1. Timelocked Strategy Changes</h2>
+
+<p>A vault owner who can instantly add a new strategy can drain every depositor in a single transaction. Propose a malicious strategy, add it with 100% allocation, rebalance, and call withdraw on the strategy to a personal address. Done in one block.</p>
+
+<p>The fix is a timelock between proposal and execution:</p>
+
+<pre><code>uint256 public constant TIMELOCK_DURATION = 2 days;
+
+struct PendingStrategy {
+    address strategy;
+    uint256 readyAt;
+}
+
+function proposeStrategy(address strategy) external onlyOwner {
+    pendingStrategy = PendingStrategy({
+        strategy: strategy,
+        readyAt: block.timestamp + TIMELOCK_DURATION
+    });
+}
+
+function executeAddStrategy(uint256 allocationBps) external onlyOwner {
+    if (block.timestamp &lt; pendingStrategy.readyAt)
+        revert TimelockNotExpired(pendingStrategy.readyAt);
+    // ... add strategy
+}</code></pre>
+
+<p>The 2-day window gives depositors time to exit if they don't trust the new strategy. This is the single most important safety mechanism a vault can have.</p>
+
+<h2>2. Allocation Caps</h2>
+
+<p>Without allocation validation, an owner can set one strategy to 200% allocation and another to -100%. Or more subtly, set a single untested strategy to 100% and put all depositor funds at risk.</p>
+
+<p>Enforce that total allocations never exceed 100% (10,000 basis points):</p>
+
+<pre><code>function _validateTotalAllocation(uint256 additionalBps) internal view {
+    uint256 totalBps = additionalBps;
+    for (uint256 i; i &lt; strategies.length;) {
+        totalBps += strategyInfo[strategies[i]].allocationBps;
+        unchecked { ++i; }
+    }
+    if (totalBps &gt; 10_000) revert AllocationExceedsBps(totalBps);
+}</code></pre>
+
+<p>This seems obvious but I've seen it missing in production contracts. The <code>setAllocation</code> function is particularly dangerous because it can be called independently of <code>addStrategy</code> and is easy to overlook.</p>
+
+<h2>3. Fault-Tolerant Emergency Withdrawal</h2>
+
+<p>Here's a pattern I see in almost every vault audit: the emergency withdrawal function iterates over strategies and calls <code>withdraw()</code> on each one. If any single strategy reverts, the entire emergency withdrawal fails.</p>
+
+<pre><code>// BAD: one reverting strategy blocks all recovery
+function emergencyWithdrawAll() external onlyOwner {
+    for (uint256 i; i &lt; strategies.length; i++) {
+        IStrategy(strategies[i]).withdraw(
+            IStrategy(strategies[i]).totalAssets()
+        );
+    }
+}
+
+// GOOD: catch failures and recover what you can
+function emergencyWithdrawAll() external onlyOwner {
+    _pause();
+    uint256 totalRecovered;
+    for (uint256 i; i &lt; strategies.length;) {
+        try IStrategy(strategies[i]).withdraw(
+            IStrategy(strategies[i]).totalAssets()
+        ) returns (uint256 recovered) {
+            totalRecovered += recovered;
+        } catch {}
+        unchecked { ++i; }
+    }
+    emit EmergencyWithdrawExecuted(totalRecovered);
+}</code></pre>
+
+<p>The try/catch ensures that if Strategy A is completely broken (paused, hacked, or just buggy), you can still recover funds from strategies B and C. Also notice the <code>_pause()</code> call: in an emergency, you want to block new deposits immediately.</p>
+
+<h2>4. Withdrawal-Side Strategy Pulling</h2>
+
+<p>ERC-4626 vaults need to handle the case where the vault's idle balance is less than the withdrawal amount. If all funds are deployed to strategies, a naive implementation will revert on <code>redeem()</code>.</p>
+
+<pre><code>function _withdraw(
+    address caller,
+    address receiver,
+    address owner,
+    uint256 assets,
+    uint256 shares
+) internal override {
+    uint256 idle = IERC20(asset()).balanceOf(address(this));
+    if (idle &lt; assets) {
+        _pullFromStrategies(assets - idle);
+    }
+    super._withdraw(caller, receiver, owner, assets, shares);
+}
+
+function _pullFromStrategies(uint256 deficit) internal {
+    for (uint256 i; i &lt; strategies.length && deficit &gt; 0;) {
+        uint256 available = IStrategy(strategies[i]).totalAssets();
+        uint256 toPull = deficit &lt; available ? deficit : available;
+        if (toPull &gt; 0) {
+            uint256 pulled = IStrategy(strategies[i]).withdraw(toPull);
+            deficit -= pulled &lt; deficit ? pulled : deficit;
+        }
+        unchecked { ++i; }
+    }
+}</code></pre>
+
+<p>Two things matter here: (1) pull from multiple strategies if needed, not just one, and (2) use the actual returned amount from <code>withdraw()</code>, not the requested amount. Strategies may return less than requested due to slippage or withdrawal fees.</p>
+
+<h2>5. Performance Fee Caps</h2>
+
+<p>Without a maximum fee, a malicious or compromised owner can set the performance fee to 100% and take all yield. But the more subtle bug is in how fees are collected.</p>
+
+<p>Many vaults take fees by transferring underlying tokens to the fee recipient. This breaks the share/asset ratio for all depositors. The correct approach is minting new shares:</p>
+
+<pre><code>uint256 public constant MAX_PERFORMANCE_FEE_BPS = 2_000; // 20% cap
+
+function _harvestStrategy(address strategy) internal {
+    uint256 harvested = IStrategy(strategy).harvest();
+    if (harvested &gt; 0 && performanceFeeBps &gt; 0) {
+        uint256 fee = harvested * performanceFeeBps / 10_000;
+        uint256 feeShares = convertToShares(fee);
+        if (feeShares &gt; 0) {
+            _mint(feeRecipient, feeShares);
+        }
+    }
+}</code></pre>
+
+<p>Minting shares dilutes all holders proportionally, which is the correct accounting. The fee recipient holds shares that represent their claim on the vault's assets, and everyone's share/asset ratio stays consistent.</p>
+
+<h2>What Auditors Actually Look For</h2>
+
+<p>After reviewing dozens of vault contracts, the highest-signal bugs aren't exotic reentrancy attacks. They're accounting errors:</p>
+
+<ul>
+    <li><strong>Stale <code>totalAssets()</code></strong> — If your total assets calculation doesn't include pending yield from strategies, share prices will be wrong. Every deposit/withdrawal compounds the error.</li>
+    <li><strong>First depositor inflation attack</strong> — ERC-4626's known issue where the first depositor can manipulate the share price. OpenZeppelin's implementation includes <a href="https://docs.openzeppelin.com/contracts/5.x/erc4626#defending_with_a_virtual_offset">virtual offset protection</a>.</li>
+    <li><strong>Strategy withdrawal return value ignored</strong> — If you request 100 USDC from a strategy but only get 99 (due to fees), and you don't track this, 1 USDC disappears from your accounting every withdrawal.</li>
+    <li><strong>Missing reentrancy guards on external calls</strong> — Strategies are external contracts. If one of them calls back into the vault during a <code>withdraw()</code>, and your vault's state hasn't been updated yet, you have a reentrancy bug.</li>
+</ul>
+
+<p>If you're building a vault, get these five patterns right first. Everything else is optimisation.</p>
+
+<p><em>Full implementation with 28 tests: <a href="https://github.com/TheAuroraAI/multi-strategy-vault">multi-strategy-vault</a></em></p>
+
+    </article>
+</main>
+</body>
+</html>
